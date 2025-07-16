@@ -3,4 +3,4 @@ __pycache__/
 .env
 .DS_Store
 *.log
-.streamlit/secrets.toml"
+.streamlit/secrets.toml""eth_dashboard_env/" 
