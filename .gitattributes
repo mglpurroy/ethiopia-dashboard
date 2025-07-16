@@ -1,1 +1,4 @@
+version https://git-lfs.github.com/spec/v1
+oid sha256:5668421d37ca740bf9df1fe157b6e2152dee590b359e57205b3212153eb9b274
+size 354
 data/eth_ppp_2020.tif filter=lfs diff=lfs merge=lfs -text
