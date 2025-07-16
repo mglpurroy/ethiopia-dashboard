@@ -1,6 +1,37 @@
-*.pyc
+# Byte-compiled / optimized / DLL files
 __pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
 .env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/
+
+# Data files (optional - you might want to include these)
+# data/
+# *.tif
+# *.shp
+# *.dbf
+# *.shx
+# *.prj
+
+# Logs
 *.log
-.streamlit/secrets.toml""eth_dashboard_env/" 

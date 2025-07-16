@@ -1,7 +1,3 @@
 gdal-bin
 libgdal-dev
-libproj-dev
-libgeos-dev
-libspatialite-dev
-libsqlite3-mod-spatialite
-build-essential
+libspatialindex-dev

@@ -13,7 +13,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
-import io
 warnings.filterwarnings('ignore')
 
 # Page configuration
@@ -42,6 +41,7 @@ st.markdown("""
         border-radius: 8px;
         margin: 0.5rem;
         text-align: center;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
     }
     .status-info {
         background: #f8f9fa;
@@ -51,6 +51,13 @@ st.markdown("""
         margin: 1rem 0;
         font-family: monospace;
         font-size: 0.9rem;
+    }
+    .map-container {
+        background: white;
+        padding: 10px;
+        border-radius: 8px;
+        margin: 15px 0;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
     }
     .stTabs [data-baseweb="tab-list"] {
         gap: 2px;
@@ -64,6 +71,10 @@ st.markdown("""
     }
     .stTabs [aria-selected="true"] {
         background-color: #ffffff;
+    }
+    /* Make maps full width */
+    .element-container iframe {
+        width: 100% !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -112,129 +123,154 @@ def generate_12_month_periods():
 
 @st.cache_data
 def load_population_data():
-    """Load and cache population data with better error handling"""
+    """Load and cache population data with comprehensive error handling"""
     try:
         # Check if shapefile exists
         if not ADMIN_SHAPEFILES[3].exists():
             st.error(f"Shapefile not found: {ADMIN_SHAPEFILES[3]}")
             return pd.DataFrame()
         
-        # Check if raster exists
-        if not POPULATION_RASTER.exists():
-            st.error(f"Population raster not found: {POPULATION_RASTER}")
-            return pd.DataFrame()
-        
         # Load shapefile
         admin3_gdf = gpd.read_file(ADMIN_SHAPEFILES[3])
         
-        # Check if raster processing is needed
-        try:
-            with rasterio.open(POPULATION_RASTER) as src:
-                # Check CRS compatibility
-                if admin3_gdf.crs != src.crs:
-                    try:
-                        admin3_gdf = admin3_gdf.to_crs(src.crs)
-                    except Exception as crs_error:
-                        st.warning(f"CRS transformation failed: {crs_error}. Using original CRS.")
-                
-                population_data = []
-                progress_bar = st.progress(0)
-                total_rows = len(admin3_gdf)
-                
-                for idx, row in admin3_gdf.iterrows():
-                    try:
-                        geom = [row.geometry.__geo_interface__]
-                        out_image, _ = mask(src, geom, crop=True, nodata=0)
-                        pop_sum = out_image[out_image > 0].sum()
-                        
-                        population_data.append({
-                            'ADM3_PCODE': row['ADM3_PCODE'],
-                            'ADM3_EN': row['ADM3_EN'],
-                            'ADM2_PCODE': row['ADM2_PCODE'],
-                            'ADM2_EN': row['ADM2_EN'],
-                            'ADM1_PCODE': row['ADM1_PCODE'],
-                            'ADM1_EN': row['ADM1_EN'],
-                            'ADM0_PCODE': row['ADM0_PCODE'],
-                            'pop_count': int(pop_sum),
-                            'pop_count_millions': pop_sum / 1e6
-                        })
-                    except Exception as row_error:
-                        # Skip problematic rows but continue processing
-                        continue
+        # Check if raster exists and process if available
+        if POPULATION_RASTER.exists():
+            try:
+                with rasterio.open(POPULATION_RASTER) as src:
+                    # Check CRS compatibility
+                    if admin3_gdf.crs != src.crs:
+                        try:
+                            admin3_gdf = admin3_gdf.to_crs(src.crs)
+                        except Exception as crs_error:
+                            st.warning(f"CRS transformation failed: {crs_error}. Using original CRS.")
                     
-                    # Update progress
-                    if idx % 50 == 0:  # Update every 50 rows
-                        progress_bar.progress((idx + 1) / total_rows)
-                
-                progress_bar.empty()
-                
-                if not population_data:
-                    st.error("No population data could be extracted from raster.")
-                    return pd.DataFrame()
-                
-                return pd.DataFrame(population_data)
-                
-        except Exception as raster_error:
-            st.error(f"Error processing population raster: {raster_error}")
-            # Try to load a simplified version without raster processing
-            st.warning("Attempting to load simplified data without population raster...")
-            
-            # Create dummy population data based on admin units
-            simplified_data = []
-            for _, row in admin3_gdf.iterrows():
-                simplified_data.append({
-                    'ADM3_PCODE': row['ADM3_PCODE'],
-                    'ADM3_EN': row['ADM3_EN'],
-                    'ADM2_PCODE': row['ADM2_PCODE'],
-                    'ADM2_EN': row['ADM2_EN'],
-                    'ADM1_PCODE': row['ADM1_PCODE'],
-                    'ADM1_EN': row['ADM1_EN'],
-                    'ADM0_PCODE': row['ADM0_PCODE'],
-                    'pop_count': 50000,  # Default population estimate
-                    'pop_count_millions': 0.05
-                })
-            
-            st.info("Using simplified population estimates. Results may be less accurate.")
-            return pd.DataFrame(simplified_data)
-            
+                    population_data = []
+                    progress_bar = st.progress(0)
+                    total_rows = len(admin3_gdf)
+                    
+                    for idx, row in admin3_gdf.iterrows():
+                        try:
+                            geom = [row.geometry.__geo_interface__]
+                            out_image, _ = mask(src, geom, crop=True, nodata=0)
+                            pop_sum = out_image[out_image > 0].sum()
+                            
+                            population_data.append({
+                                'ADM3_PCODE': row['ADM3_PCODE'],
+                                'ADM3_EN': row['ADM3_EN'],
+                                'ADM2_PCODE': row['ADM2_PCODE'],
+                                'ADM2_EN': row['ADM2_EN'],
+                                'ADM1_PCODE': row['ADM1_PCODE'],
+                                'ADM1_EN': row['ADM1_EN'],
+                                'ADM0_PCODE': row['ADM0_PCODE'],
+                                'pop_count': int(pop_sum),
+                                'pop_count_millions': pop_sum / 1e6
+                            })
+                        except Exception:
+                            # Skip problematic rows but continue processing
+                            continue
+                        
+                        # Update progress every 50 rows
+                        if idx % 50 == 0:
+                            progress_bar.progress((idx + 1) / total_rows)
+                    
+                    progress_bar.empty()
+                    
+                    if not population_data:
+                        st.error("No population data could be extracted from raster.")
+                        return pd.DataFrame()
+                    
+                    st.success(f"✅ Loaded population data for {len(population_data)} woredas")
+                    return pd.DataFrame(population_data)
+                    
+            except Exception as raster_error:
+                st.warning(f"Error processing population raster: {raster_error}")
+                st.info("Using simplified population estimates...")
+        
+        # Fallback: Create simplified population data
+        simplified_data = []
+        for _, row in admin3_gdf.iterrows():
+            simplified_data.append({
+                'ADM3_PCODE': row['ADM3_PCODE'],
+                'ADM3_EN': row['ADM3_EN'],
+                'ADM2_PCODE': row['ADM2_PCODE'],
+                'ADM2_EN': row['ADM2_EN'],
+                'ADM1_PCODE': row['ADM1_PCODE'],
+                'ADM1_EN': row['ADM1_EN'],
+                'ADM0_PCODE': row['ADM0_PCODE'],
+                'pop_count': 50000,  # Default population estimate
+                'pop_count_millions': 0.05
+            })
+        
+        st.info(f"✅ Using simplified population estimates for {len(simplified_data)} woredas")
+        return pd.DataFrame(simplified_data)
+        
     except Exception as e:
         st.error(f"Error loading population data: {str(e)}")
-        st.info("Troubleshooting tips:")
-        st.info("1. Install pyproj: pip install pyproj")
-        st.info("2. Try conda: conda install -c conda-forge pyproj")
-        st.info("3. Check data file paths")
         return pd.DataFrame()
 
 @st.cache_data
+def create_admin_levels(pop_data):
+    """Create admin level aggregations from population data"""
+    if pop_data.empty:
+        return {'admin1': pd.DataFrame(), 'admin2': pd.DataFrame(), 'admin3': pop_data}
+    
+    # Admin 2 (Zones)
+    admin2_agg = pop_data.groupby(['ADM2_PCODE', 'ADM2_EN', 'ADM1_PCODE', 'ADM1_EN', 'ADM0_PCODE']).agg({
+        'pop_count': 'sum',
+        'pop_count_millions': 'sum'
+    }).reset_index()
+    
+    # Admin 1 (Regions)
+    admin1_agg = pop_data.groupby(['ADM1_PCODE', 'ADM1_EN', 'ADM0_PCODE']).agg({
+        'pop_count': 'sum',
+        'pop_count_millions': 'sum'
+    }).reset_index()
+    
+    return {
+        'admin3': pop_data,
+        'admin2': admin2_agg,
+        'admin1': admin1_agg
+    }
+
+@st.cache_data
 def load_conflict_data():
-    """Load and cache conflict data"""
+    """Load and cache conflict data with better error handling"""
     try:
+        if not (PROCESSED_PATH / "intersection_result_acled.csv").exists():
+            st.error(f"Conflict data not found: {PROCESSED_PATH / 'intersection_result_acled.csv'}")
+            return pd.DataFrame()
+        
         acled_data = pd.read_csv(PROCESSED_PATH / "intersection_result_acled.csv")
         ethiopia_acled = acled_data[acled_data['GID_0'] == 'ETH'].copy()
         
-        # Map GID codes to ADM_PCODE system
-        conflict_mapped = ethiopia_acled.groupby(['year', 'month', 'GID_3']).agg({
-            'ACLED_BRD_state': 'sum',
-            'ACLED_BRD_nonstate': 'sum',
-            'ACLED_BRD_total': 'sum'
-        }).reset_index()
+        # Map GID codes to ADM_PCODE system for simplicity
+        if 'GID_3' in ethiopia_acled.columns:
+            conflict_mapped = ethiopia_acled.groupby(['year', 'month', 'GID_3']).agg({
+                'ACLED_BRD_state': 'sum',
+                'ACLED_BRD_nonstate': 'sum',
+                'ACLED_BRD_total': 'sum'
+            }).reset_index()
+            
+            # Rename GID_3 to ADM3_PCODE for consistency
+            conflict_mapped = conflict_mapped.rename(columns={'GID_3': 'ADM3_PCODE'})
+            st.success(f"✅ Loaded conflict data: {len(conflict_mapped)} records")
+            return conflict_mapped
+        else:
+            st.warning("GID_3 column not found in conflict data")
+            return pd.DataFrame()
         
-        # Rename GID_3 to ADM3_PCODE for consistency
-        conflict_mapped = conflict_mapped.rename(columns={'GID_3': 'ADM3_PCODE'})
-        
-        return conflict_mapped
     except Exception as e:
         st.error(f"Error loading conflict data: {str(e)}")
         return pd.DataFrame()
 
 @st.cache_data
 def load_admin_boundaries():
-    """Load administrative boundaries with better error handling"""
+    """Load administrative boundaries with comprehensive error handling"""
     boundaries = {}
     for level in [1, 2, 3]:
         try:
             if not ADMIN_SHAPEFILES[level].exists():
-                st.error(f"Shapefile not found: {ADMIN_SHAPEFILES[level]}")
+                st.warning(f"Shapefile not found: {ADMIN_SHAPEFILES[level]}")
                 boundaries[level] = gpd.GeoDataFrame()
                 continue
                 
@@ -243,7 +279,7 @@ def load_admin_boundaries():
             st.success(f"✅ Loaded Admin {level} boundaries: {len(gdf)} features")
             
         except Exception as e:
-            st.error(f"Error loading admin {level} boundaries: {str(e)}")
+            st.warning(f"Error loading admin {level} boundaries: {str(e)}")
             boundaries[level] = gpd.GeoDataFrame()
     
     return boundaries
@@ -268,7 +304,7 @@ def filter_data_by_period(data, period_info):
         return data[((data['year'] == start_year) & (data['month'] >= start_month)) |
                    ((data['year'] == end_year) & (data['month'] <= end_month))]
 
-def classify_and_aggregate_data(pop_data, conflict_data, period_info, rate_thresh, abs_thresh, agg_thresh, agg_level):
+def classify_and_aggregate_data(pop_data, admin_data, conflict_data, period_info, rate_thresh, abs_thresh, agg_thresh, agg_level):
     """Classify woredas and aggregate to selected administrative level"""
     
     # Filter conflict data for selected period
@@ -331,7 +367,7 @@ def classify_and_aggregate_data(pop_data, conflict_data, period_info, rate_thres
     return aggregated, merged
 
 def create_admin_map(aggregated, boundaries, agg_level, map_var, agg_thresh, period_info, rate_thresh, abs_thresh):
-    """Create administrative units map"""
+    """Create administrative units map with full width"""
     
     # Determine columns
     pcode_col = f'{agg_level}_PCODE'
@@ -348,6 +384,10 @@ def create_admin_map(aggregated, boundaries, agg_level, map_var, agg_thresh, per
     map_level_num = 1 if agg_level == 'ADM1' else 2
     gdf = boundaries[map_level_num]
     
+    if gdf.empty:
+        st.error(f"No boundary data available for {agg_level}")
+        return None
+    
     # Merge data with boundaries
     merged_gdf = gdf.merge(
         aggregated[[pcode_col, value_col, 'above_threshold', 'violence_affected', 'total_woredas', 'pop_count', 'ACLED_BRD_total']], 
@@ -362,7 +402,7 @@ def create_admin_map(aggregated, boundaries, agg_level, map_var, agg_thresh, per
         'ACLED_BRD_total': 0
     })
     
-    # Create map
+    # Create map with full width
     m = folium.Map(location=[9.15, 40.49], zoom_start=6, tiles='OpenStreetMap')
     
     # Add choropleth layer
@@ -410,13 +450,38 @@ def create_admin_map(aggregated, boundaries, agg_level, map_var, agg_thresh, per
             tooltip=f"{row.get(name_col, 'Unknown')}: {row[value_col]:.1%} ({status})"
         ).add_to(m)
     
+    # Add legend
+    legend_html = f'''
+    <div style="position: fixed; top: 10px; right: 10px; width: 280px; 
+                background-color: white; border:2px solid grey; z-index:9999; 
+                font-size:11px; padding: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+                border-radius: 6px;">
+    <h4 style="margin: 0 0 8px 0; color: #333;">{value_label}</h4>
+    <div style="margin-bottom: 8px;">
+        <div style="margin: 4px 0;"><span style="background:#d73027; color:white; padding:2px 4px; border-radius:2px; font-size:10px;">HIGH</span> Above Threshold (>{agg_thresh:.1%})</div>
+        <div style="margin: 4px 0;"><span style="background:#fd8d3c; color:white; padding:2px 4px; border-radius:2px; font-size:10px;">SOME</span> Below Threshold (>0%)</div>
+        <div style="margin: 4px 0;"><span style="background:#2c7fb8; color:white; padding:2px 4px; border-radius:2px; font-size:10px;">LOW</span> Minimal/No Violence (0%)</div>
+    </div>
+    <hr style="margin: 8px 0;">
+    <div style="font-size:10px; color:#666;">
+        <strong>Period:</strong> {period_info['label']}<br>
+        <strong>Criteria:</strong> >{rate_thresh:.1f}/100k & >{abs_thresh} deaths
+    </div>
+    </div>
+    '''
+    
+    m.get_root().html.add_child(folium.Element(legend_html))
     return m
 
 def create_woreda_map(woreda_data, boundaries, period_info, rate_thresh, abs_thresh):
-    """Create woreda classification map"""
+    """Create woreda classification map with full width"""
     
     # Get woreda boundaries
     woreda_gdf = boundaries[3]
+    
+    if woreda_gdf.empty:
+        st.error("No woreda boundary data available")
+        return None
     
     # Merge with classification data
     merged_woreda = woreda_gdf.merge(
@@ -429,7 +494,7 @@ def create_woreda_map(woreda_data, boundaries, period_info, rate_thresh, abs_thr
         'acled_total_death_rate': 0
     })
     
-    # Create map
+    # Create map with full width
     m = folium.Map(location=[9.15, 40.49], zoom_start=6, tiles='OpenStreetMap')
     
     # Add woreda layer
@@ -474,10 +539,32 @@ def create_woreda_map(woreda_data, boundaries, period_info, rate_thresh, abs_thr
             tooltip=f"{row.get('ADM3_EN', 'Unknown')}: {status}"
         ).add_to(m)
     
+    # Add legend
+    legend_html = f'''
+    <div style="position: fixed; top: 10px; right: 10px; width: 260px; 
+                background-color: white; border:2px solid grey; z-index:9999; 
+                font-size:11px; padding: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+                border-radius: 6px;">
+    <h4 style="margin: 0 0 8px 0; color: #333;">Woreda Classification</h4>
+    <div style="margin-bottom: 8px;">
+        <div style="margin: 4px 0;"><span style="background:#d73027; color:white; padding:2px 4px; border-radius:2px; font-size:10px;">AFFECTED</span> Violence Affected</div>
+        <div style="margin: 4px 0;"><span style="background:#fd8d3c; color:white; padding:2px 4px; border-radius:2px; font-size:10px;">BELOW</span> Below Threshold</div>
+        <div style="margin: 4px 0;"><span style="background:#2c7fb8; color:white; padding:2px 4px; border-radius:2px; font-size:10px;">NONE</span> No Violence</div>
+    </div>
+    <hr style="margin: 8px 0;">
+    <div style="font-size:10px; color:#666;">
+        <strong>Period:</strong> {period_info['label']}<br>
+        <strong>Criteria:</strong> >{rate_thresh:.1f}/100k & >{abs_thresh} deaths<br>
+        <strong>Affected:</strong> {sum(woreda_data['violence_affected'])}/{len(woreda_data)} ({sum(woreda_data['violence_affected'])/len(woreda_data)*100:.1f}%)
+    </div>
+    </div>
+    '''
+    
+    m.get_root().html.add_child(folium.Element(legend_html))
     return m
 
 def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_thresh):
-    """Create analysis charts using Plotly"""
+    """Create comprehensive analysis charts using Plotly"""
     
     fig = make_subplots(
         rows=2, cols=2,
@@ -504,7 +591,8 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
                 x=aggregated_nonzero['share_woredas_affected'],
                 orientation='h',
                 marker_color=colors,
-                showlegend=False
+                showlegend=False,
+                hovertemplate='<b>%{y}</b><br>Share: %{x:.1%}<extra></extra>'
             ),
             row=1, col=1
         )
@@ -521,7 +609,8 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
                 y=aggregated['ACLED_BRD_total'],
                 mode='markers',
                 marker=dict(color=scatter_colors, size=8),
-                showlegend=False
+                showlegend=False,
+                hovertemplate='<b>Population:</b> %{x:.0f}k<br><b>Deaths:</b> %{y}<extra></extra>'
             ),
             row=1, col=2
         )
@@ -541,7 +630,8 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
                 labels=level_counts.index,
                 values=level_counts.values,
                 marker_colors=colors_pie,
-                showlegend=False
+                showlegend=False,
+                hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>'
             ),
             row=2, col=1
         )
@@ -561,7 +651,10 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
                 x=categories,
                 y=values,
                 marker_color=colors,
-                showlegend=False
+                showlegend=False,
+                hovertemplate='<b>%{x}</b><br>Count: %{y}<br>Percentage: %{y:.1%}<extra></extra>',
+                text=[f'{v}<br>({v/len(woreda_data)*100:.1f}%)' for v in values],
+                textposition='auto'
             ),
             row=2, col=2
         )
@@ -589,62 +682,72 @@ def main():
     # Header
     st.markdown("""
     <div class="main-header">
-        <h1>🇪🇹 Ethiopia Violence Analysis Dashboard</h1>
-        <p>Interactive analysis with 12-month periods and detailed woreda mapping</p>
+        <h1>🇪🇹 Ethiopia Violence Analysis Dashboard - Enhanced</h1>
+        <p>Interactive analysis with 12-month periods and comprehensive woreda mapping</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Load data
+    # Load data with progress indicators
     with st.spinner("Loading data..."):
         periods = generate_12_month_periods()
         pop_data = load_population_data()
+        admin_data = create_admin_levels(pop_data)
         conflict_data = load_conflict_data()
         boundaries = load_admin_boundaries()
     
-    if pop_data.empty or conflict_data.empty:
-        st.error("Failed to load required data. Please check your data files.")
-        return
+    if pop_data.empty:
+        st.error("Failed to load population data. Please check your data files.")
+        st.stop()
+    
+    if conflict_data.empty:
+        st.warning("No conflict data available. Dashboard will show population data only.")
     
     # Sidebar controls
-    st.sidebar.header("🎛️ Analysis Controls")
+    st.sidebar.header("🎛️ Enhanced Analysis Controls")
     
     # Violence Classification
     st.sidebar.subheader("📊 Violence Classification")
     rate_thresh = st.sidebar.slider(
         "Death Rate Threshold (per 100k)",
-        min_value=0.5, max_value=20.0, value=4.0, step=0.5
+        min_value=0.5, max_value=20.0, value=4.0, step=0.5,
+        help="Minimum death rate per 100,000 population to classify as violence-affected"
     )
     abs_thresh = st.sidebar.slider(
         "Min Deaths Threshold",
-        min_value=1, max_value=100, value=20, step=1
+        min_value=1, max_value=100, value=20, step=1,
+        help="Minimum absolute number of deaths to classify as violence-affected"
     )
     agg_thresh = st.sidebar.slider(
         "Aggregation Threshold",
-        min_value=0.05, max_value=0.5, value=0.2, step=0.05
+        min_value=0.05, max_value=0.5, value=0.2, step=0.05,
+        help="Minimum share of woredas affected to mark administrative unit as high-violence"
     )
     
     # Analysis Settings
-    st.sidebar.subheader("🗺️ Analysis Settings")
+    st.sidebar.subheader("🗺️ Analysis & Display Settings")
     period_labels = [p['label'] for p in periods]
     period_idx = st.sidebar.selectbox(
         "Analysis Period",
         options=range(len(periods)),
         format_func=lambda x: periods[x]['label'],
-        index=len(periods) - 10
+        index=len(periods) - 10,
+        help="Select 12-month analysis period (calendar year or mid-year cycle)"
     )
     
     agg_level = st.sidebar.selectbox(
         "Administrative Level",
         options=['ADM1', 'ADM2'],
         format_func=lambda x: 'Admin 1 (Regions)' if x == 'ADM1' else 'Admin 2 (Zones)',
-        index=1
+        index=1,
+        help="Administrative level for aggregated analysis"
     )
     
     map_var = st.sidebar.selectbox(
         "Map Variable",
         options=['share_woredas', 'share_population'],
         format_func=lambda x: 'Share of Woredas Affected' if x == 'share_woredas' else 'Share of Population Affected',
-        index=0
+        index=0,
+        help="Variable to display on administrative units map"
     )
     
     # Get selected period info
@@ -663,12 +766,12 @@ def main():
     """, unsafe_allow_html=True)
     
     # Process data
-    with st.spinner("Processing data..."):
+    with st.spinner("Processing analysis..."):
         aggregated, woreda_data = classify_and_aggregate_data(
-            pop_data, conflict_data, period_info, rate_thresh, abs_thresh, agg_thresh, agg_level
+            pop_data, admin_data, conflict_data, period_info, rate_thresh, abs_thresh, agg_thresh, agg_level
         )
     
-    # Metrics
+    # Display metrics
     if len(aggregated) > 0:
         total_units = len(aggregated)
         above_threshold_count = aggregated['above_threshold'].sum()
@@ -678,7 +781,7 @@ def main():
         affected_population = aggregated['affected_population'].sum()
         total_deaths = aggregated['ACLED_BRD_total'].sum()
         
-        # Display metrics
+        # Display metrics in a grid
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -717,72 +820,134 @@ def main():
             </div>
             """, unsafe_allow_html=True)
     
-    # Maps
+    # Maps section
     st.header("🗺️ Interactive Violence Maps")
+    st.markdown("**📍 Administrative Units**: Aggregated analysis by regions/zones | **🏘️ Woreda Classification**: Individual woreda violence classification")
     
     tab1, tab2 = st.tabs(["📍 Administrative Units", "🏘️ Woreda Classification"])
     
     with tab1:
-        st.subheader("Administrative Units Analysis")
+        st.subheader(f"Administrative Units Analysis - {agg_level}")
         if len(aggregated) > 0:
             admin_map = create_admin_map(
                 aggregated, boundaries, agg_level, map_var, agg_thresh, period_info, rate_thresh, abs_thresh
             )
-            st_folium(admin_map, width=700, height=500)
+            if admin_map:
+                # Use full width for the map
+                st_folium(admin_map, width=None, height=600, returned_objects=["last_object_clicked"])
+            else:
+                st.error("Could not create administrative map due to missing boundary data.")
         else:
             st.warning("No administrative data available for the selected period.")
     
     with tab2:
-        st.subheader("Woreda Classification")
+        st.subheader("Individual Woreda Classification")
         if len(woreda_data) > 0:
             woreda_map = create_woreda_map(
                 woreda_data, boundaries, period_info, rate_thresh, abs_thresh
             )
-            st_folium(woreda_map, width=700, height=500)
+            if woreda_map:
+                # Use full width for the map
+                st_folium(woreda_map, width=None, height=600, returned_objects=["last_object_clicked"])
+            else:
+                st.error("Could not create woreda map due to missing boundary data.")
         else:
             st.warning("No woreda data available for the selected period.")
     
     # Analysis Charts
-    st.header("📈 Supporting Analysis")
+    st.header("📈 Supporting Analysis & Insights")
     
     if len(aggregated) > 0 and len(woreda_data) > 0:
         analysis_fig = create_analysis_charts(
             aggregated, woreda_data, period_info, agg_level, agg_thresh
         )
         st.plotly_chart(analysis_fig, use_container_width=True)
+        
+        # Additional insights
+        st.subheader("📋 Key Insights")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### 🔍 Violence Hotspots")
+            if len(aggregated[aggregated['above_threshold']]) > 0:
+                hotspots = aggregated[aggregated['above_threshold']].sort_values('share_woredas_affected', ascending=False)
+                name_col = f'{agg_level}_EN'
+                for idx, row in hotspots.head(5).iterrows():
+                    st.markdown(f"**{row[name_col]}**: {row['share_woredas_affected']:.1%} woredas affected ({row['violence_affected']}/{row['total_woredas']})")
+            else:
+                st.markdown("No units above the violence threshold in this period.")
+        
+        with col2:
+            st.markdown("### 📊 Statistical Summary")
+            st.markdown(f"**Period**: {period_info['label']}")
+            st.markdown(f"**Total Deaths**: {total_deaths:,}")
+            st.markdown(f"**National Death Rate**: {(total_deaths/total_population)*1e5:.1f} per 100k")
+            st.markdown(f"**Violence Coverage**: {affected_woredas/total_woredas*100:.1f}% of woredas")
+            st.markdown(f"**Population Impact**: {affected_population/total_population*100:.1f}% of population")
     else:
         st.warning("No data available for analysis charts.")
     
-    # Data Export
+    # Data Export Section
     st.header("📥 Data Export")
     
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("📊 Export Aggregated Data"):
+        if st.button("📊 Export Aggregated Data", use_container_width=True):
             if len(aggregated) > 0:
                 csv = aggregated.to_csv(index=False)
                 st.download_button(
                     label="Download Aggregated Data CSV",
                     data=csv,
-                    file_name=f"ethiopia_aggregated_{period_info['label'].replace(' ', '_')}.csv",
-                    mime="text/csv"
+                    file_name=f"ethiopia_aggregated_{period_info['label'].replace(' ', '_').replace('-', '_')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
                 )
             else:
                 st.warning("No aggregated data to export.")
     
     with col2:
-        if st.button("🏘️ Export Woreda Data"):
+        if st.button("🏘️ Export Woreda Data", use_container_width=True):
             if len(woreda_data) > 0:
                 csv = woreda_data.to_csv(index=False)
                 st.download_button(
                     label="Download Woreda Data CSV",
                     data=csv,
-                    file_name=f"ethiopia_woredas_{period_info['label'].replace(' ', '_')}.csv",
-                    mime="text/csv"
+                    file_name=f"ethiopia_woredas_{period_info['label'].replace(' ', '_').replace('-', '_')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
                 )
             else:
                 st.warning("No woreda data to export.")
+    
+    with col3:
+        if st.button("📈 Export Analysis Summary", use_container_width=True):
+            if len(aggregated) > 0:
+                summary_data = {
+                    'period': [period_info['label']],
+                    'period_type': [period_info['type']],
+                    'total_units': [total_units],
+                    'high_violence_units': [above_threshold_count],
+                    'total_woredas': [total_woredas],
+                    'affected_woredas': [affected_woredas],
+                    'total_population': [total_population],
+                    'affected_population': [affected_population],
+                    'total_deaths': [total_deaths],
+                    'national_death_rate': [(total_deaths/total_population)*1e5],
+                    'analysis_timestamp': [datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
+                }
+                summary_df = pd.DataFrame(summary_data)
+                csv = summary_df.to_csv(index=False)
+                st.download_button(
+                    label="Download Summary CSV",
+                    data=csv,
+                    file_name=f"ethiopia_summary_{period_info['label'].replace(' ', '_').replace('-', '_')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            else:
+                st.warning("No summary data to export.")
 
 # Main app navigation - simplified to single page
 def app():
@@ -879,4 +1044,6 @@ Key features:
 - Data export capabilities
 - Responsive design with proper error handling
 - Improved error handling for missing dependencies
+- Full-width maps for better visualization
+- Enhanced dashboard with complete functionality
 """
