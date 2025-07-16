@@ -682,7 +682,7 @@ def main():
     # Header
     st.markdown("""
     <div class="main-header">
-        <h1>🇪🇹 Ethiopia Violence Analysis Dashboard - Enhanced</h1>
+        <h1>🇪🇹 Ethiopia Violence Analysis Dashboard</h1>
         <p>Interactive analysis with 12-month periods and comprehensive woreda mapping</p>
     </div>
     """, unsafe_allow_html=True)
@@ -703,7 +703,7 @@ def main():
         st.warning("No conflict data available. Dashboard will show population data only.")
     
     # Sidebar controls
-    st.sidebar.header("🎛️ Enhanced Analysis Controls")
+    st.sidebar.header("🎛️ Analysis Controls")
     
     # Violence Classification
     st.sidebar.subheader("📊 Violence Classification")
