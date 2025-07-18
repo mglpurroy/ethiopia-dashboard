@@ -814,7 +814,7 @@ def main():
         with col4:
             st.markdown(f"""
             <div class="metric-card">
-                <h4>💀 Total Deaths</h4>
+                <h4>Total Deaths</h4>
                 <div style="font-size: 24px; font-weight: bold;">{total_deaths:,}</div>
                 <div>in {period_info['label']}</div>
             </div>
