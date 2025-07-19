@@ -22,6 +22,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+st.info("🚧 **BETA VERSION** - This dashboard is currently in beta testing")
 
 # Custom CSS
 st.markdown("""
