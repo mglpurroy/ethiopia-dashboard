@@ -1,25 +1,21 @@
-# Core Streamlit and data processing - optimized versions
-streamlit>=1.28.0,<2.0.0
-pandas>=2.0.0,<2.2.0
-numpy>=1.24.0,<1.26.0
+# Streamlit Cloud Compatible Requirements
+# Core Streamlit and data processing
+streamlit>=1.28.0
+pandas>=1.5.0
+numpy>=1.21.0
 
-# Geospatial processing - optimized versions
-geopandas>=0.14.0,<0.15.0
-rasterio>=1.3.8,<1.4.0
-pyproj>=3.6.0,<3.7.0
-fiona>=1.9.0,<1.10.0
-shapely>=2.0.0,<2.1.0
+# Geospatial processing
+geopandas>=0.13.0
+rasterio>=1.3.0
+pyproj>=3.4.0
+fiona>=1.8.0
+shapely>=1.8.0
 
-# Visualization - optimized versions
-matplotlib>=3.7.0,<3.8.0
-plotly>=5.15.0,<5.18.0
-folium>=0.14.0,<0.16.0
-streamlit-folium>=0.15.0,<0.16.0
+# Visualization
+matplotlib>=3.5.0
+plotly>=5.0.0
+folium>=0.14.0
+streamlit-folium>=0.13.0
 
-# Performance optimization packages
-numba>=0.57.0,<0.59.0  # JIT compilation for numerical functions
-cython>=0.29.0,<3.1.0  # C extensions for speed
-psutil>=5.9.0,<6.0.0   # System monitoring
-
-# Memory optimization
-pympler>=0.9,<1.0      # Memory profiling
+# System monitoring (lightweight)
+psutil>=5.9.0

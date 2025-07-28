@@ -17,6 +17,7 @@ import gc
 from functools import lru_cache
 import pickle
 import hashlib
+import os
 warnings.filterwarnings('ignore')
 
 # Page configuration
@@ -104,7 +105,14 @@ st.markdown("""
 DATA_PATH = Path("data/")
 PROCESSED_PATH = DATA_PATH / "processed"
 CACHE_PATH = Path("cache/")
-CACHE_PATH.mkdir(exist_ok=True)
+
+# Create cache directory only if we have write permissions
+try:
+    CACHE_PATH.mkdir(exist_ok=True)
+    CACHE_ENABLED = True
+except (PermissionError, OSError):
+    CACHE_ENABLED = False
+    st.warning("⚠️ Cache directory not writable. File caching disabled.")
 
 POPULATION_RASTER = DATA_PATH / "eth_ppp_2020.tif"
 ADMIN_SHAPEFILES = {
@@ -122,22 +130,28 @@ def get_cache_key(*args):
 
 def save_to_cache(key, data):
     """Save data to cache file"""
+    if not CACHE_ENABLED:
+        return
     try:
         cache_file = CACHE_PATH / f"{key}.pkl"
         with open(cache_file, 'wb') as f:
             pickle.dump(data, f)
     except Exception as e:
-        st.warning(f"Cache save failed: {e}")
+        # Silently fail in cloud environments
+        pass
 
 def load_from_cache(key):
     """Load data from cache file"""
+    if not CACHE_ENABLED:
+        return None
     try:
         cache_file = CACHE_PATH / f"{key}.pkl"
         if cache_file.exists():
             with open(cache_file, 'rb') as f:
                 return pickle.load(f)
     except Exception as e:
-        st.warning(f"Cache load failed: {e}")
+        # Silently fail in cloud environments
+        pass
     return None
 
 @st.cache_data(ttl=3600)  # Cache for 1 hour
@@ -989,10 +1003,12 @@ def main():
     
     if pop_data.empty:
         st.error("Failed to load population data. Please check your data files.")
+        st.info("If you're running this on Streamlit Cloud, make sure all data files are included in your repository.")
         st.stop()
     
     if conflict_data.empty:
         st.warning("No conflict data available. Dashboard will show population data only.")
+        st.info("The dashboard will continue with limited functionality.")
     
     # Sidebar controls
     st.sidebar.header("🎛️ Analysis Controls")
@@ -1286,14 +1302,21 @@ def main():
                 if key in st.session_state:
                     del st.session_state[key]
             
-            # Clear file cache
-            import shutil
-            if CACHE_PATH.exists():
-                shutil.rmtree(CACHE_PATH)
-                CACHE_PATH.mkdir(exist_ok=True)
+            # Clear file cache if enabled
+            if CACHE_ENABLED:
+                try:
+                    import shutil
+                    if CACHE_PATH.exists():
+                        shutil.rmtree(CACHE_PATH)
+                        CACHE_PATH.mkdir(exist_ok=True)
+                except Exception:
+                    pass  # Silently fail in cloud environments
             
             st.success("Cache cleared! Please refresh the page to reload data.")
-            st.experimental_rerun()
+            try:
+                st.rerun()
+            except AttributeError:
+                st.experimental_rerun()
     
     # Total app performance
     total_time = time.time() - app_start_time
