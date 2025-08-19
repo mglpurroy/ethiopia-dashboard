@@ -822,6 +822,22 @@ def create_woreda_map(woreda_data, boundaries, period_info, rate_thresh, abs_thr
             tooltip=f"{row.get('ADM3_EN', 'Unknown')}: {status}"
         ).add_to(m)
     
+    # Add Admin1 (Region) borders on top of woredas
+    admin1_gdf = boundaries[1]
+    if not admin1_gdf.empty:
+        for _, row in admin1_gdf.iterrows():
+            folium.GeoJson(
+                row.geometry,
+                style_function=lambda x: {
+                    'fillColor': 'transparent',
+                    'color': '#000000',
+                    'weight': 2,
+                    'fillOpacity': 0,
+                    'opacity': 0.8
+                },
+                tooltip=f"Region: {row.get('ADM1_EN', 'Unknown')}"
+            ).add_to(m)
+    
     # Simplified legend
     legend_html = f'''
     <div style="position: fixed; top: 10px; right: 10px; width: 240px; 
@@ -837,7 +853,8 @@ def create_woreda_map(woreda_data, boundaries, period_info, rate_thresh, abs_thr
     <div style="font-size:9px; color:#666;">
         <strong>Period:</strong> {period_info['label']}<br>
         <strong>Criteria:</strong> >{rate_thresh:.1f}/100k & >{abs_thresh} deaths<br>
-        <strong>Affected:</strong> {affected_woredas}/{total_woredas} ({affected_percentage:.1f}%)
+        <strong>Affected:</strong> {affected_woredas}/{total_woredas} ({affected_percentage:.1f}%)<br>
+        <strong>Black borders:</strong> Region boundaries
     </div>
     </div>
     '''
@@ -859,7 +876,9 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
             'Woreda Classification Breakdown'
         ),
         specs=[[{"type": "xy"}, {"type": "xy"}],
-               [{"type": "domain"}, {"type": "xy"}]]
+               [{"type": "domain"}, {"type": "xy"}]],
+        vertical_spacing=0.12,
+        horizontal_spacing=0.1
     )
     
     # Chart 1: Horizontal bar chart of units with violence
@@ -869,9 +888,26 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
         name_col = f'{agg_level}_EN'
         colors = ['#d73027' if above else '#fd8d3c' for above in aggregated_nonzero['above_threshold']]
         
+        # Process names to ensure they fit properly
+        processed_names = []
+        for name in aggregated_nonzero[name_col]:
+            if len(name) > 25:
+                # For very long names, try to find a good break point
+                if ' ' in name:
+                    words = name.split(' ')
+                    if len(words) > 2:
+                        # Try to break at a logical point
+                        processed_name = ' '.join(words[:2]) + '\n' + ' '.join(words[2:])
+                    else:
+                        processed_name = name[:22] + '...'
+                else:
+                    processed_name = name[:22] + '...'
+            else:
+                processed_name = name
+        
         fig.add_trace(
             go.Bar(
-                y=[name[:20] + '...' if len(name) > 20 else name for name in aggregated_nonzero[name_col]],
+                y=processed_names,
                 x=aggregated_nonzero['share_woredas_affected'],
                 orientation='h',
                 marker_color=colors,
@@ -943,18 +979,27 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
             row=2, col=2
         )
     
-    # Update layout
+    # Update layout with better spacing and sizing
     fig.update_layout(
-        height=700,
+        height=800,  # Increased height
+        width=1200,  # Set explicit width
         title_text=f'Supporting Analysis - {period_info["label"]}',
-        showlegend=False
+        showlegend=False,
+        margin=dict(l=50, r=50, t=80, b=50)  # Better margins
     )
     
+    # Update axes with better formatting
     fig.update_xaxes(title_text="Share of Woredas Affected", row=1, col=1)
     fig.update_xaxes(title_text="Population (thousands)", row=1, col=2)
     fig.update_xaxes(title_text="Category", row=2, col=2)
     
-    fig.update_yaxes(title_text="Administrative Unit", row=1, col=1)
+    # Update y-axes with better formatting for the bar chart
+    fig.update_yaxes(
+        title_text="Administrative Unit", 
+        row=1, col=1,
+        tickfont=dict(size=10),  # Smaller font for better fit
+        automargin=True  # Auto-adjust margins
+    )
     fig.update_yaxes(title_text="Total Deaths", row=1, col=2)
     fig.update_yaxes(title_text="Number of Woredas", row=2, col=2)
     
@@ -1180,7 +1225,8 @@ def main():
         analysis_fig = create_analysis_charts(
             aggregated, woreda_data, period_info, agg_level, agg_thresh
         )
-        st.plotly_chart(analysis_fig, use_container_width=True)
+        # Use full container width and set a minimum height
+        st.plotly_chart(analysis_fig, use_container_width=True, height=800)
         
         # Additional insights
         st.subheader("📋 Key Insights")
