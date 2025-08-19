@@ -882,17 +882,15 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
     )
     
     # Chart 1: Horizontal bar chart of units with violence
-    # Show all units, not just those with violence, for better visibility
-    aggregated_sorted = aggregated.sort_values('share_woredas_affected', ascending=True)
+    aggregated_nonzero = aggregated[aggregated['share_woredas_affected'] > 0].sort_values('share_woredas_affected', ascending=True)
     
-    if len(aggregated_sorted) > 0:
+    if len(aggregated_nonzero) > 0:
         name_col = f'{agg_level}_EN'
-        colors = ['#d73027' if above else '#fd8d3c' if share > 0 else '#2c7fb8' 
-                 for above, share in zip(aggregated_sorted['above_threshold'], aggregated_sorted['share_woredas_affected'])]
+        colors = ['#d73027' if above else '#fd8d3c' for above in aggregated_nonzero['above_threshold']]
         
-        # Process names to ensure they fit properly
+        # Process names to ensure they fit properly and align with bars
         processed_names = []
-        for name in aggregated_sorted[name_col]:
+        for name in aggregated_nonzero[name_col]:
             if len(name) > 25:
                 # For very long names, try to find a good break point
                 if ' ' in name:
@@ -910,7 +908,7 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
         fig.add_trace(
             go.Bar(
                 y=processed_names,
-                x=aggregated_sorted['share_woredas_affected'],
+                x=aggregated_nonzero['share_woredas_affected'],
                 orientation='h',
                 marker_color=colors,
                 showlegend=False,
@@ -999,8 +997,11 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
     fig.update_yaxes(
         title_text="Administrative Unit", 
         row=1, col=1,
-        tickfont=dict(size=10),  # Smaller font for better fit
-        automargin=True  # Auto-adjust margins
+        tickfont=dict(size=11),  # Slightly larger font for better readability
+        automargin=True,  # Auto-adjust margins
+        tickmode='array',  # Ensure consistent tick positioning
+        ticktext=processed_names if len(aggregated_nonzero) > 0 else [],
+        tickvals=list(range(len(processed_names))) if len(aggregated_nonzero) > 0 else []
     )
     fig.update_yaxes(title_text="Total Deaths", row=1, col=2)
     fig.update_yaxes(title_text="Number of Woredas", row=2, col=2)
