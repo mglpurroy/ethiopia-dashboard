@@ -84,11 +84,7 @@ st.markdown("""
 DATA_PATH = Path("data/")
 PROCESSED_PATH = DATA_PATH / "processed"
 POPULATION_RASTER = DATA_PATH / "eth_ppp_2020.tif"
-ADMIN_SHAPEFILES = {
-    1: DATA_PATH / "eth_adm_csa_bofedb_2021_shp/eth_admbnda_adm1_csa_bofedb_2021.shp",
-    2: DATA_PATH / "eth_adm_csa_bofedb_2021_shp/eth_admbnda_adm2_csa_bofedb_2021.shp",
-    3: DATA_PATH / "eth_adm_csa_bofedb_2021_shp/eth_admbnda_adm3_csa_bofedb_2021.shp"
-}
+ETHIOPIA_SHAPEFILE = DATA_PATH / "ETH" / "Ethiopia.shp"
 
 START_YEAR = 2009
 END_YEAR = 2025
@@ -127,12 +123,12 @@ def load_population_data():
     """Load and cache population data with comprehensive error handling"""
     try:
         # Check if shapefile exists
-        if not ADMIN_SHAPEFILES[3].exists():
-            st.error(f"Shapefile not found: {ADMIN_SHAPEFILES[3]}")
+        if not ETHIOPIA_SHAPEFILE.exists():
+            st.error(f"Shapefile not found: {ETHIOPIA_SHAPEFILE}")
             return pd.DataFrame()
         
         # Load shapefile
-        admin3_gdf = gpd.read_file(ADMIN_SHAPEFILES[3])
+        admin3_gdf = gpd.read_file(ETHIOPIA_SHAPEFILE)
         
         # Check if raster exists and process if available
         if POPULATION_RASTER.exists():
@@ -162,7 +158,7 @@ def load_population_data():
                                 'ADM2_EN': row['ADM2_EN'],
                                 'ADM1_PCODE': row['ADM1_PCODE'],
                                 'ADM1_EN': row['ADM1_EN'],
-                                'ADM0_PCODE': row['ADM0_PCODE'],
+                                'ADM0_PCODE': 'ETH',  # Ethiopia country code
                                 'pop_count': int(pop_sum),
                                 'pop_count_millions': pop_sum / 1e6
                             })
@@ -197,7 +193,7 @@ def load_population_data():
                 'ADM2_EN': row['ADM2_EN'],
                 'ADM1_PCODE': row['ADM1_PCODE'],
                 'ADM1_EN': row['ADM1_EN'],
-                'ADM0_PCODE': row['ADM0_PCODE'],
+                'ADM0_PCODE': 'ETH',  # Ethiopia country code
                 'pop_count': 50000,  # Default population estimate
                 'pop_count_millions': 0.05
             })
@@ -268,20 +264,37 @@ def load_conflict_data():
 def load_admin_boundaries():
     """Load administrative boundaries with comprehensive error handling"""
     boundaries = {}
-    for level in [1, 2, 3]:
-        try:
-            if not ADMIN_SHAPEFILES[level].exists():
-                st.warning(f"Shapefile not found: {ADMIN_SHAPEFILES[level]}")
-                boundaries[level] = gpd.GeoDataFrame()
-                continue
-                
-            gdf = gpd.read_file(ADMIN_SHAPEFILES[level])
-            boundaries[level] = gdf
-            st.success(f"✅ Loaded Admin {level} boundaries: {len(gdf)} features")
-            
-        except Exception as e:
-            st.warning(f"Error loading admin {level} boundaries: {str(e)}")
-            boundaries[level] = gpd.GeoDataFrame()
+    try:
+        if not ETHIOPIA_SHAPEFILE.exists():
+            st.warning(f"Shapefile not found: {ETHIOPIA_SHAPEFILE}")
+            return {1: gpd.GeoDataFrame(), 2: gpd.GeoDataFrame(), 3: gpd.GeoDataFrame()}
+        
+        # Load the main shapefile
+        gdf = gpd.read_file(ETHIOPIA_SHAPEFILE)
+        
+        # Admin 3 (Woredas) - use the original data
+        boundaries[3] = gdf
+        st.success(f"✅ Loaded Admin 3 (Woredas) boundaries: {len(gdf)} features")
+        
+        # Admin 2 (Zones) - aggregate from woredas
+        admin2_gdf = gdf.dissolve(by=['ADM2_PCODE', 'ADM2_EN', 'ADM1_PCODE', 'ADM1_EN'], 
+                                 aggfunc='first', as_index=False)
+        # Ensure column names are preserved
+        admin2_gdf = admin2_gdf[['ADM2_PCODE', 'ADM2_EN', 'ADM1_PCODE', 'ADM1_EN', 'geometry']]
+        boundaries[2] = admin2_gdf
+        st.success(f"✅ Created Admin 2 (Zones) boundaries: {len(admin2_gdf)} features")
+        
+        # Admin 1 (Regions) - aggregate from woredas
+        admin1_gdf = gdf.dissolve(by=['ADM1_PCODE', 'ADM1_EN'], 
+                                 aggfunc='first', as_index=False)
+        # Ensure column names are preserved
+        admin1_gdf = admin1_gdf[['ADM1_PCODE', 'ADM1_EN', 'geometry']]
+        boundaries[1] = admin1_gdf
+        st.success(f"✅ Created Admin 1 (Regions) boundaries: {len(admin1_gdf)} features")
+        
+    except Exception as e:
+        st.warning(f"Error loading admin boundaries: {str(e)}")
+        boundaries = {1: gpd.GeoDataFrame(), 2: gpd.GeoDataFrame(), 3: gpd.GeoDataFrame()}
     
     return boundaries
 

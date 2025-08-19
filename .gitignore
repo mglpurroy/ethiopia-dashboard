@@ -11,6 +11,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+eth_dashboard_env/
 
 # IDE files
 .vscode/
