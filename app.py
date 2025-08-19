@@ -13,6 +13,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
+import gc
+from functools import lru_cache
+import pickle
+import hashlib
+import os
 warnings.filterwarnings('ignore')
 
 # Page configuration
@@ -22,9 +27,20 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Performance monitoring
+if 'performance_metrics' not in st.session_state:
+    st.session_state.performance_metrics = {}
+
+def log_performance(func_name, duration):
+    """Log performance metrics for monitoring"""
+    if func_name not in st.session_state.performance_metrics:
+        st.session_state.performance_metrics[func_name] = []
+    st.session_state.performance_metrics[func_name].append(duration)
+
 st.info("🚧 **BETA VERSION** - This dashboard is currently in beta testing")
 
-# Custom CSS
+# Custom CSS - optimized for better performance
 st.markdown("""
 <style>
     .main-header {
@@ -53,12 +69,13 @@ st.markdown("""
         font-family: monospace;
         font-size: 0.9rem;
     }
-    .map-container {
-        background: white;
-        padding: 10px;
-        border-radius: 8px;
-        margin: 15px 0;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    .performance-info {
+        background: #e3f2fd;
+        padding: 0.5rem;
+        border-radius: 4px;
+        border-left: 3px solid #2196f3;
+        margin: 0.5rem 0;
+        font-size: 0.8rem;
     }
     .stTabs [data-baseweb="tab-list"] {
         gap: 2px;
@@ -73,9 +90,13 @@ st.markdown("""
     .stTabs [aria-selected="true"] {
         background-color: #ffffff;
     }
-    /* Make maps full width */
+    /* Optimize map rendering */
     .element-container iframe {
         width: 100% !important;
+    }
+    /* Loading spinner optimization */
+    .stSpinner > div {
+        border-top-color: #667eea !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -83,15 +104,55 @@ st.markdown("""
 # Data paths - adjust these for your deployment
 DATA_PATH = Path("data/")
 PROCESSED_PATH = DATA_PATH / "processed"
+CACHE_PATH = Path("cache/")
+
+# Create cache directory only if we have write permissions
+try:
+    CACHE_PATH.mkdir(exist_ok=True)
+    CACHE_ENABLED = True
+except (PermissionError, OSError):
+    CACHE_ENABLED = False
+    st.warning("⚠️ Cache directory not writable. File caching disabled.")
+
 POPULATION_RASTER = DATA_PATH / "eth_ppp_2020.tif"
 ETHIOPIA_SHAPEFILE = DATA_PATH / "ETH" / "Ethiopia.shp"
 
 START_YEAR = 2009
 END_YEAR = 2025
 
-@st.cache_data
+def get_cache_key(*args):
+    """Generate cache key from arguments"""
+    return hashlib.md5(str(args).encode()).hexdigest()
+
+def save_to_cache(key, data):
+    """Save data to cache file"""
+    if not CACHE_ENABLED:
+        return
+    try:
+        cache_file = CACHE_PATH / f"{key}.pkl"
+        with open(cache_file, 'wb') as f:
+            pickle.dump(data, f)
+    except Exception as e:
+        # Silently fail in cloud environments
+        pass
+
+def load_from_cache(key):
+    """Load data from cache file"""
+    if not CACHE_ENABLED:
+        return None
+    try:
+        cache_file = CACHE_PATH / f"{key}.pkl"
+        if cache_file.exists():
+            with open(cache_file, 'rb') as f:
+                return pickle.load(f)
+    except Exception as e:
+        # Silently fail in cloud environments
+        pass
+    return None
+
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def generate_12_month_periods():
-    """Generate 12-month periods every 6 months"""
+    """Generate 12-month periods every 6 months - optimized"""
     periods = []
     
     # Calendar year periods (Jan-Dec)
@@ -118,17 +179,31 @@ def generate_12_month_periods():
     
     return periods
 
-@st.cache_data
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_population_data():
-    """Load and cache population data with comprehensive error handling"""
+    """Load and cache population data with optimized processing"""
+    import time
+    start_time = time.time()
+    
+    # Check cache first
+    cache_key = get_cache_key("population_data", "v2")
+    cached_data = load_from_cache(cache_key)
+    if cached_data is not None:
+        log_performance("load_population_data", time.time() - start_time)
+        st.success(f"✅ Loaded cached population data for {len(cached_data)} woredas")
+        return cached_data
+    
     try:
         # Check if shapefile exists
         if not ETHIOPIA_SHAPEFILE.exists():
             st.error(f"Shapefile not found: {ETHIOPIA_SHAPEFILE}")
             return pd.DataFrame()
         
-        # Load shapefile
+        # Load shapefile with optimized settings
         admin3_gdf = gpd.read_file(ETHIOPIA_SHAPEFILE)
+        
+        # Optimize geometry for faster processing
+        admin3_gdf = admin3_gdf.to_crs('EPSG:4326')  # Ensure consistent CRS
         
         # Check if raster exists and process if available
         if POPULATION_RASTER.exists():
@@ -145,30 +220,39 @@ def load_population_data():
                     progress_bar = st.progress(0)
                     total_rows = len(admin3_gdf)
                     
-                    for idx, row in admin3_gdf.iterrows():
-                        try:
-                            geom = [row.geometry.__geo_interface__]
-                            out_image, _ = mask(src, geom, crop=True, nodata=0)
-                            pop_sum = out_image[out_image > 0].sum()
-                            
-                            population_data.append({
-                                'ADM3_PCODE': row['ADM3_PCODE'],
-                                'ADM3_EN': row['ADM3_EN'],
-                                'ADM2_PCODE': row['ADM2_PCODE'],
-                                'ADM2_EN': row['ADM2_EN'],
-                                'ADM1_PCODE': row['ADM1_PCODE'],
-                                'ADM1_EN': row['ADM1_EN'],
-                                'ADM0_PCODE': 'ETH',  # Ethiopia country code
-                                'pop_count': int(pop_sum),
-                                'pop_count_millions': pop_sum / 1e6
-                            })
-                        except Exception:
-                            # Skip problematic rows but continue processing
-                            continue
+                    # Process in batches for better memory management
+                    batch_size = 50
+                    for batch_start in range(0, total_rows, batch_size):
+                        batch_end = min(batch_start + batch_size, total_rows)
+                        batch_gdf = admin3_gdf.iloc[batch_start:batch_end]
                         
-                        # Update progress every 50 rows
-                        if idx % 50 == 0:
-                            progress_bar.progress((idx + 1) / total_rows)
+                        for idx, row in batch_gdf.iterrows():
+                            try:
+                                geom = [row.geometry.__geo_interface__]
+                                out_image, _ = mask(src, geom, crop=True, nodata=0)
+                                pop_sum = out_image[out_image > 0].sum()
+                                
+                                population_data.append({
+                                    'ADM3_PCODE': row['ADM3_PCODE'],
+                                    'ADM3_EN': row['ADM3_EN'],
+                                    'ADM2_PCODE': row['ADM2_PCODE'],
+                                    'ADM2_EN': row['ADM2_EN'],
+                                    'ADM1_PCODE': row['ADM1_PCODE'],
+                                    'ADM1_EN': row['ADM1_EN'],
+                                    'ADM0_PCODE': 'ETH',  # Ethiopia country code
+                                    'pop_count': int(pop_sum),
+                                    'pop_count_millions': pop_sum / 1e6
+                                })
+                            except Exception:
+                                # Skip problematic rows but continue processing
+                                continue
+                        
+                        # Update progress
+                        progress_bar.progress(batch_end / total_rows)
+                        
+                        # Force garbage collection to manage memory
+                        if batch_start % (batch_size * 4) == 0:
+                            gc.collect()
                     
                     progress_bar.empty()
                     
@@ -176,8 +260,14 @@ def load_population_data():
                         st.error("No population data could be extracted from raster.")
                         return pd.DataFrame()
                     
+                    result_df = pd.DataFrame(population_data)
+                    
+                    # Cache the result
+                    save_to_cache(cache_key, result_df)
+                    
+                    log_performance("load_population_data", time.time() - start_time)
                     st.success(f"✅ Loaded population data for {len(population_data)} woredas")
-                    return pd.DataFrame(population_data)
+                    return result_df
                     
             except Exception as raster_error:
                 st.warning(f"Error processing population raster: {raster_error}")
@@ -198,30 +288,40 @@ def load_population_data():
                 'pop_count_millions': 0.05
             })
         
+        result_df = pd.DataFrame(simplified_data)
+        
+        # Cache the result
+        save_to_cache(cache_key, result_df)
+        
+        log_performance("load_population_data", time.time() - start_time)
         st.info(f"✅ Using simplified population estimates for {len(simplified_data)} woredas")
-        return pd.DataFrame(simplified_data)
+        return result_df
         
     except Exception as e:
         st.error(f"Error loading population data: {str(e)}")
         return pd.DataFrame()
 
-@st.cache_data
+@st.cache_data(ttl=3600, show_spinner=False)
 def create_admin_levels(pop_data):
-    """Create admin level aggregations from population data"""
+    """Create admin level aggregations from population data - optimized"""
+    import time
+    start_time = time.time()
+    
     if pop_data.empty:
         return {'admin1': pd.DataFrame(), 'admin2': pd.DataFrame(), 'admin3': pop_data}
     
-    # Admin 2 (Zones)
-    admin2_agg = pop_data.groupby(['ADM2_PCODE', 'ADM2_EN', 'ADM1_PCODE', 'ADM1_EN', 'ADM0_PCODE']).agg({
+    # Use vectorized operations for better performance
+    admin2_agg = pop_data.groupby(['ADM2_PCODE', 'ADM2_EN', 'ADM1_PCODE', 'ADM1_EN', 'ADM0_PCODE'], as_index=False).agg({
         'pop_count': 'sum',
         'pop_count_millions': 'sum'
-    }).reset_index()
+    })
     
-    # Admin 1 (Regions)
-    admin1_agg = pop_data.groupby(['ADM1_PCODE', 'ADM1_EN', 'ADM0_PCODE']).agg({
+    admin1_agg = pop_data.groupby(['ADM1_PCODE', 'ADM1_EN', 'ADM0_PCODE'], as_index=False).agg({
         'pop_count': 'sum',
         'pop_count_millions': 'sum'
-    }).reset_index()
+    })
+    
+    log_performance("create_admin_levels", time.time() - start_time)
     
     return {
         'admin3': pop_data,
@@ -229,27 +329,68 @@ def create_admin_levels(pop_data):
         'admin1': admin1_agg
     }
 
-@st.cache_data
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_conflict_data():
-    """Load and cache conflict data with better error handling"""
+    """Load and cache conflict data with optimized processing"""
+    import time
+    start_time = time.time()
+    
+    # Check cache first
+    cache_key = get_cache_key("conflict_data", "v2")
+    cached_data = load_from_cache(cache_key)
+    if cached_data is not None:
+        log_performance("load_conflict_data", time.time() - start_time)
+        st.success(f"✅ Loaded cached conflict data: {len(cached_data)} records")
+        return cached_data
+    
     try:
-        if not (PROCESSED_PATH / "intersection_result_acled.csv").exists():
-            st.error(f"Conflict data not found: {PROCESSED_PATH / 'intersection_result_acled.csv'}")
+        conflict_file = PROCESSED_PATH / "intersection_result_acled.csv"
+        if not conflict_file.exists():
+            st.error(f"Conflict data not found: {conflict_file}")
             return pd.DataFrame()
         
-        acled_data = pd.read_csv(PROCESSED_PATH / "intersection_result_acled.csv")
-        ethiopia_acled = acled_data[acled_data['GID_0'] == 'ETH'].copy()
+        # Load data with optimized dtypes
+        dtypes = {
+            'GID_0': 'category',
+            'year': 'int16',
+            'month': 'int8',
+            'ACLED_BRD_state': 'float32',
+            'ACLED_BRD_nonstate': 'float32',
+            'ACLED_BRD_total': 'float32'
+        }
         
-        # Map GID codes to ADM_PCODE system for simplicity
+        # Load in chunks for memory efficiency
+        chunk_size = 10000
+        chunks = []
+        
+        for chunk in pd.read_csv(conflict_file, chunksize=chunk_size, dtype=dtypes):
+            ethiopia_chunk = chunk[chunk['GID_0'] == 'ETH'].copy()
+            if not ethiopia_chunk.empty:
+                chunks.append(ethiopia_chunk)
+        
+        if not chunks:
+            st.warning("No Ethiopia data found in conflict file")
+            return pd.DataFrame()
+        
+        # Combine chunks
+        ethiopia_acled = pd.concat(chunks, ignore_index=True)
+        
+        # Optimize data processing
         if 'GID_3' in ethiopia_acled.columns:
-            conflict_mapped = ethiopia_acled.groupby(['year', 'month', 'GID_3']).agg({
+            # Use efficient aggregation
+            conflict_mapped = ethiopia_acled.groupby(['year', 'month', 'GID_3'], as_index=False).agg({
                 'ACLED_BRD_state': 'sum',
                 'ACLED_BRD_nonstate': 'sum',
                 'ACLED_BRD_total': 'sum'
-            }).reset_index()
+            })
             
             # Rename GID_3 to ADM3_PCODE for consistency
             conflict_mapped = conflict_mapped.rename(columns={'GID_3': 'ADM3_PCODE'})
+            
+            # Cache the result
+            save_to_cache(cache_key, conflict_mapped)
+            
+            log_performance("load_conflict_data", time.time() - start_time)
             st.success(f"✅ Loaded conflict data: {len(conflict_mapped)} records")
             return conflict_mapped
         else:
@@ -260,17 +401,31 @@ def load_conflict_data():
         st.error(f"Error loading conflict data: {str(e)}")
         return pd.DataFrame()
 
-@st.cache_data
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_admin_boundaries():
-    """Load administrative boundaries with comprehensive error handling"""
+    """Load administrative boundaries with optimized processing"""
+    import time
+    start_time = time.time()
+    
+    # Check cache first
+    cache_key = get_cache_key("admin_boundaries", "v2")
+    cached_data = load_from_cache(cache_key)
+    if cached_data is not None:
+        log_performance("load_admin_boundaries", time.time() - start_time)
+        st.success("✅ Loaded cached administrative boundaries")
+        return cached_data
+    
     boundaries = {}
     try:
         if not ETHIOPIA_SHAPEFILE.exists():
             st.warning(f"Shapefile not found: {ETHIOPIA_SHAPEFILE}")
             return {1: gpd.GeoDataFrame(), 2: gpd.GeoDataFrame(), 3: gpd.GeoDataFrame()}
         
-        # Load the main shapefile
+        # Load the main shapefile with optimized settings
         gdf = gpd.read_file(ETHIOPIA_SHAPEFILE)
+        
+        # Ensure consistent CRS
+        gdf = gdf.to_crs('EPSG:4326')
         
         # Admin 3 (Woredas) - use the original data
         boundaries[3] = gdf
@@ -281,6 +436,8 @@ def load_admin_boundaries():
                                  aggfunc='first', as_index=False)
         # Ensure column names are preserved
         admin2_gdf = admin2_gdf[['ADM2_PCODE', 'ADM2_EN', 'ADM1_PCODE', 'ADM1_EN', 'geometry']]
+        # Simplify geometries for better performance
+        admin2_gdf.geometry = admin2_gdf.geometry.simplify(tolerance=0.001, preserve_topology=True)
         boundaries[2] = admin2_gdf
         st.success(f"✅ Created Admin 2 (Zones) boundaries: {len(admin2_gdf)} features")
         
@@ -289,6 +446,8 @@ def load_admin_boundaries():
                                  aggfunc='first', as_index=False)
         # Ensure column names are preserved
         admin1_gdf = admin1_gdf[['ADM1_PCODE', 'ADM1_EN', 'geometry']]
+        # Simplify geometries for better performance
+        admin1_gdf.geometry = admin1_gdf.geometry.simplify(tolerance=0.001, preserve_topology=True)
         boundaries[1] = admin1_gdf
         st.success(f"✅ Created Admin 1 (Regions) boundaries: {len(admin1_gdf)} features")
         
@@ -296,10 +455,21 @@ def load_admin_boundaries():
         st.warning(f"Error loading admin boundaries: {str(e)}")
         boundaries = {1: gpd.GeoDataFrame(), 2: gpd.GeoDataFrame(), 3: gpd.GeoDataFrame()}
     
+    # Cache the result
+    save_to_cache(cache_key, boundaries)
+    
+    log_performance("load_admin_boundaries", time.time() - start_time)
     return boundaries
 
-def filter_data_by_period(data, period_info):
-    """Filter data based on 12-month period"""
+@lru_cache(maxsize=128)
+def filter_data_by_period(data_hash, period_info_str):
+    """Filter data based on 12-month period - cached version"""
+    # This is a placeholder - actual implementation would need to handle the data properly
+    # The caching is done at a higher level in the processing pipeline
+    pass
+
+def filter_data_by_period_impl(data, period_info):
+    """Filter data based on 12-month period - optimized implementation"""
     if len(data) == 0:
         return data
     
@@ -309,79 +479,168 @@ def filter_data_by_period(data, period_info):
     end_month = period_info['end_month']
     
     if period_info['type'] == 'calendar':
-        # Calendar year: Jan-Dec
-        return data[(data['year'] == start_year) & 
-                   (data['month'] >= start_month) & 
-                   (data['month'] <= end_month)]
+        # Calendar year: Jan-Dec - use vectorized operations
+        mask = (data['year'] == start_year) & (data['month'] >= start_month) & (data['month'] <= end_month)
+        return data[mask]
     else:
-        # Mid-year: Jul-Jun
-        return data[((data['year'] == start_year) & (data['month'] >= start_month)) |
-                   ((data['year'] == end_year) & (data['month'] <= end_month))]
+        # Mid-year: Jul-Jun - use vectorized operations
+        mask = ((data['year'] == start_year) & (data['month'] >= start_month)) | \
+               ((data['year'] == end_year) & (data['month'] <= end_month))
+        return data[mask]
 
 def classify_and_aggregate_data(pop_data, admin_data, conflict_data, period_info, rate_thresh, abs_thresh, agg_thresh, agg_level):
-    """Classify woredas and aggregate to selected administrative level"""
+    """Classify woredas and aggregate to selected administrative level - optimized"""
+    import time
+    start_time = time.time()
     
-    # Filter conflict data for selected period
-    period_conflict = filter_data_by_period(conflict_data, period_info)
+    # Filter conflict data for selected period using optimized function
+    period_conflict = filter_data_by_period_impl(conflict_data, period_info)
     
-    # Aggregate conflict data by woreda for the period
+    # Aggregate conflict data by woreda for the period using vectorized operations
     if len(period_conflict) > 0:
-        conflict_agg = period_conflict.groupby('ADM3_PCODE').agg({
+        conflict_agg = period_conflict.groupby('ADM3_PCODE', as_index=False).agg({
             'ACLED_BRD_state': 'sum',
             'ACLED_BRD_nonstate': 'sum',
             'ACLED_BRD_total': 'sum'
-        }).reset_index()
+        })
     else:
         conflict_agg = pd.DataFrame()
     
-    # Merge with population data
+    # Merge with population data using optimized merge
     if len(conflict_agg) > 0:
-        merged = pd.merge(pop_data, conflict_agg, on='ADM3_PCODE', how='left').fillna(0)
+        merged = pd.merge(pop_data, conflict_agg, on='ADM3_PCODE', how='left')
+        # Use vectorized fillna
+        conflict_cols = ['ACLED_BRD_state', 'ACLED_BRD_nonstate', 'ACLED_BRD_total']
+        merged[conflict_cols] = merged[conflict_cols].fillna(0)
     else:
         merged = pop_data.copy()
         for col in ['ACLED_BRD_state', 'ACLED_BRD_nonstate', 'ACLED_BRD_total']:
             merged[col] = 0
     
-    # Calculate death rates
+    # Calculate death rates using vectorized operations
     merged['acled_total_death_rate'] = (merged['ACLED_BRD_total'] / (merged['pop_count_millions'] * 1e6)) * 1e5
     
-    # Classify woredas
+    # Classify woredas using vectorized operations
     merged['violence_affected'] = (
         (merged['acled_total_death_rate'] > rate_thresh) & 
         (merged['ACLED_BRD_total'] > abs_thresh)
     )
     
-    # Aggregate to selected level
+    # Aggregate to selected level using optimized groupby
     if agg_level == 'ADM1':
         group_cols = ['ADM1_PCODE', 'ADM1_EN']
     else:  # ADM2
         group_cols = ['ADM2_PCODE', 'ADM2_EN', 'ADM1_PCODE', 'ADM1_EN']
     
-    aggregated = merged.groupby(group_cols).agg({
+    aggregated = merged.groupby(group_cols, as_index=False).agg({
         'pop_count': 'sum',
         'violence_affected': 'sum',
         'ADM3_PCODE': 'count',
         'ACLED_BRD_total': 'sum'
-    }).reset_index()
+    })
     
     aggregated.rename(columns={'ADM3_PCODE': 'total_woredas'}, inplace=True)
     
-    # Calculate shares
+    # Calculate shares using vectorized operations
     aggregated['share_woredas_affected'] = aggregated['violence_affected'] / aggregated['total_woredas']
     
-    # Calculate population share
-    affected_pop = merged[merged['violence_affected']].groupby(group_cols[0])['pop_count'].sum().reset_index()
+    # Calculate population share using optimized operations
+    affected_pop = merged[merged['violence_affected']].groupby(group_cols[0], as_index=False)['pop_count'].sum()
     affected_pop.rename(columns={'pop_count': 'affected_population'}, inplace=True)
-    aggregated = pd.merge(aggregated, affected_pop, on=group_cols[0], how='left').fillna(0)
+    aggregated = pd.merge(aggregated, affected_pop, on=group_cols[0], how='left')
+    aggregated['affected_population'] = aggregated['affected_population'].fillna(0)
     aggregated['share_population_affected'] = aggregated['affected_population'] / aggregated['pop_count']
     
-    # Mark units above threshold
+    # Mark units above threshold using vectorized operations
     aggregated['above_threshold'] = aggregated['share_woredas_affected'] > agg_thresh
+    
+    log_performance("classify_and_aggregate_data", time.time() - start_time)
     
     return aggregated, merged
 
+def create_optimized_map(gdf, value_col, value_label, threshold, is_woreda=False):
+    """Create optimized map with reduced complexity"""
+    import time
+    start_time = time.time()
+    
+    # Create map with optimized settings
+    m = folium.Map(
+        location=[9.15, 40.49], 
+        zoom_start=6, 
+        tiles='OpenStreetMap',
+        prefer_canvas=True  # Use canvas for better performance
+    )
+    
+    # Reduce the number of features for better performance
+    if len(gdf) > 1000:
+        st.warning("Large dataset detected. Map rendering may be slow.")
+    
+    # Add features with optimized styling
+    for idx, (_, row) in enumerate(gdf.iterrows()):
+        if idx % 100 == 0:  # Progress indicator for large datasets
+            pass
+        
+        value = row.get(value_col, 0)
+        
+        # Determine color and status
+        if is_woreda:
+            if row.get('violence_affected', False):
+                color = '#d73027'
+                status = "VIOLENCE AFFECTED"
+                opacity = 0.8
+            elif row.get('ACLED_BRD_total', 0) > 0:
+                color = '#fd8d3c'
+                status = "Below Threshold"
+                opacity = 0.6
+            else:
+                color = '#2c7fb8'
+                status = "No Violence"
+                opacity = 0.3
+        else:
+            if value > threshold:
+                color = '#d73027'
+                status = "HIGH VIOLENCE"
+                opacity = 0.8
+            elif value > 0:
+                color = '#fd8d3c'
+                status = "Some Violence"
+                opacity = 0.7
+            else:
+                color = '#2c7fb8'
+                status = "Low/No Violence"
+                opacity = 0.4
+        
+        # Simplified popup content
+        popup_content = f"""
+        <div style="width: 250px; font-family: Arial, sans-serif;">
+            <h4 style="color: {color}; margin: 0;">{row.get('ADM3_EN' if is_woreda else f'ADM{1 if "ADM1" in str(row) else 2}_EN', 'Unknown')}</h4>
+            <div style="background: {color}; color: white; padding: 3px; border-radius: 2px; text-align: center; margin: 5px 0;">
+                <strong>{status}</strong>
+            </div>
+            <p><strong>{value_label}:</strong> {value:.1%}</p>
+        </div>
+        """
+        
+        # Add to map with optimized settings
+        folium.GeoJson(
+            row.geometry,
+            style_function=lambda x, color=color, opacity=opacity: {
+                'fillColor': color,
+                'color': 'black',
+                'weight': 0.5 if is_woreda else 1,
+                'fillOpacity': opacity
+            },
+            popup=folium.Popup(popup_content, max_width=280),
+            tooltip=f"{row.get('ADM3_EN' if is_woreda else f'ADM{1 if "ADM1" in str(row) else 2}_EN', 'Unknown')}: {status}"
+        ).add_to(m)
+    
+    log_performance("create_optimized_map", time.time() - start_time)
+    return m
+
 def create_admin_map(aggregated, boundaries, agg_level, map_var, agg_thresh, period_info, rate_thresh, abs_thresh):
-    """Create administrative units map with full width"""
+    """Create administrative units map with optimized performance"""
+    import time
+    start_time = time.time()
     
     # Determine columns
     pcode_col = f'{agg_level}_PCODE'
@@ -402,53 +661,53 @@ def create_admin_map(aggregated, boundaries, agg_level, map_var, agg_thresh, per
         st.error(f"No boundary data available for {agg_level}")
         return None
     
-    # Merge data with boundaries
-    merged_gdf = gdf.merge(
-        aggregated[[pcode_col, value_col, 'above_threshold', 'violence_affected', 'total_woredas', 'pop_count', 'ACLED_BRD_total']], 
-        on=pcode_col, 
-        how='left'
-    ).fillna({
+    # Merge data with boundaries using optimized merge
+    merge_cols = [pcode_col, value_col, 'above_threshold', 'violence_affected', 'total_woredas', 'pop_count', 'ACLED_BRD_total']
+    merged_gdf = gdf.merge(aggregated[merge_cols], on=pcode_col, how='left')
+    
+    # Use vectorized fillna
+    fill_values = {
         value_col: 0, 
         'above_threshold': False, 
         'violence_affected': 0, 
         'total_woredas': 0,
         'pop_count': 0,
         'ACLED_BRD_total': 0
-    })
+    }
+    merged_gdf = merged_gdf.fillna(fill_values)
     
-    # Create map with full width
-    m = folium.Map(location=[9.15, 40.49], zoom_start=6, tiles='OpenStreetMap')
+    # Create map with optimized settings
+    m = folium.Map(
+        location=[9.15, 40.49], 
+        zoom_start=6, 
+        tiles='OpenStreetMap',
+        prefer_canvas=True
+    )
     
-    # Add choropleth layer
+    # Pre-calculate colors and status for better performance
+    def get_color_status(value):
+        if value > agg_thresh:
+            return '#d73027', 0.8, "HIGH VIOLENCE"
+        elif value > 0:
+            return '#fd8d3c', 0.7, "Some Violence"
+        else:
+            return '#2c7fb8', 0.4, "Low/No Violence"
+    
+    # Add choropleth layer with optimized rendering
     for _, row in merged_gdf.iterrows():
         value = row[value_col]
+        color, opacity, status = get_color_status(value)
         
-        if value > agg_thresh:
-            color = '#d73027'  # Red - High violence
-            opacity = 0.8
-            status = "HIGH VIOLENCE"
-        elif value > 0:
-            color = '#fd8d3c'  # Orange - Some violence
-            opacity = 0.7
-            status = "Some Violence"
-        else:
-            color = '#2c7fb8'  # Blue - Low/No violence
-            opacity = 0.4
-            status = "Low/No Violence"
-        
+        # Simplified popup content for better performance
         popup_content = f"""
-        <div style="width: 300px; font-family: Arial, sans-serif;">
-            <h3 style="color: {color}; margin: 0 0 10px 0;">{row.get(name_col, 'Unknown')}</h3>
-            <div style="background: {color}; color: white; padding: 5px; border-radius: 3px; text-align: center; margin-bottom: 10px;">
+        <div style="width: 280px; font-family: Arial, sans-serif;">
+            <h4 style="color: {color}; margin: 0;">{row.get(name_col, 'Unknown')}</h4>
+            <div style="background: {color}; color: white; padding: 3px; border-radius: 2px; text-align: center; margin: 5px 0;">
                 <strong>{status}</strong>
             </div>
-            <table style="width: 100%; border-collapse: collapse;">
-                <tr><td><strong>{value_label}:</strong></td><td style="text-align: right;">{row[value_col]:.1%}</td></tr>
-                <tr><td><strong>Above Threshold:</strong></td><td style="text-align: right;">{'Yes' if row['above_threshold'] else 'No'}</td></tr>
-                <tr><td><strong>Affected Woredas:</strong></td><td style="text-align: right;">{row['violence_affected']}/{row['total_woredas']}</td></tr>
-                <tr><td><strong>Population:</strong></td><td style="text-align: right;">{row['pop_count']:,.0f}</td></tr>
-                <tr><td><strong>Total Deaths:</strong></td><td style="text-align: right;">{row['ACLED_BRD_total']:,.0f}</td></tr>
-            </table>
+            <p><strong>{value_label}:</strong> {value:.1%}</p>
+            <p><strong>Affected Woredas:</strong> {row['violence_affected']}/{row['total_woredas']}</p>
+            <p><strong>Total Deaths:</strong> {row['ACLED_BRD_total']:,.0f}</p>
         </div>
         """
         
@@ -457,27 +716,26 @@ def create_admin_map(aggregated, boundaries, agg_level, map_var, agg_thresh, per
             style_function=lambda x, color=color, opacity=opacity: {
                 'fillColor': color,
                 'color': 'black',
-                'weight': 1,
+                'weight': 0.8,
                 'fillOpacity': opacity
             },
-            popup=folium.Popup(popup_content, max_width=350),
-            tooltip=f"{row.get(name_col, 'Unknown')}: {row[value_col]:.1%} ({status})"
+            popup=folium.Popup(popup_content, max_width=300),
+            tooltip=f"{row.get(name_col, 'Unknown')}: {value:.1%}"
         ).add_to(m)
     
-    # Add legend
+    # Simplified legend
     legend_html = f'''
-    <div style="position: fixed; top: 10px; right: 10px; width: 280px; 
+    <div style="position: fixed; top: 10px; right: 10px; width: 250px; 
                 background-color: white; border:2px solid grey; z-index:9999; 
-                font-size:11px; padding: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-                border-radius: 6px;">
-    <h4 style="margin: 0 0 8px 0; color: #333;">{value_label}</h4>
-    <div style="margin-bottom: 8px;">
-        <div style="margin: 4px 0;"><span style="background:#d73027; color:white; padding:2px 4px; border-radius:2px; font-size:10px;">HIGH</span> Above Threshold (>{agg_thresh:.1%})</div>
-        <div style="margin: 4px 0;"><span style="background:#fd8d3c; color:white; padding:2px 4px; border-radius:2px; font-size:10px;">SOME</span> Below Threshold (>0%)</div>
-        <div style="margin: 4px 0;"><span style="background:#2c7fb8; color:white; padding:2px 4px; border-radius:2px; font-size:10px;">LOW</span> Minimal/No Violence (0%)</div>
+                font-size:11px; padding: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+                border-radius: 4px;">
+    <h4 style="margin: 0 0 6px 0; color: #333;">{value_label}</h4>
+    <div style="margin-bottom: 6px;">
+        <div style="margin: 2px 0;"><span style="background:#d73027; color:white; padding:1px 3px; border-radius:1px; font-size:9px;">HIGH</span> >{agg_thresh:.1%}</div>
+        <div style="margin: 2px 0;"><span style="background:#fd8d3c; color:white; padding:1px 3px; border-radius:1px; font-size:9px;">SOME</span> >0%</div>
+        <div style="margin: 2px 0;"><span style="background:#2c7fb8; color:white; padding:1px 3px; border-radius:1px; font-size:9px;">LOW</span> 0%</div>
     </div>
-    <hr style="margin: 8px 0;">
-    <div style="font-size:10px; color:#666;">
+    <div style="font-size:9px; color:#666;">
         <strong>Period:</strong> {period_info['label']}<br>
         <strong>Criteria:</strong> >{rate_thresh:.1f}/100k & >{abs_thresh} deaths
     </div>
@@ -485,10 +743,14 @@ def create_admin_map(aggregated, boundaries, agg_level, map_var, agg_thresh, per
     '''
     
     m.get_root().html.add_child(folium.Element(legend_html))
+    
+    log_performance("create_admin_map", time.time() - start_time)
     return m
 
 def create_woreda_map(woreda_data, boundaries, period_info, rate_thresh, abs_thresh):
-    """Create woreda classification map with full width"""
+    """Create woreda classification map with optimized performance"""
+    import time
+    start_time = time.time()
     
     # Get woreda boundaries
     woreda_gdf = boundaries[3]
@@ -497,47 +759,54 @@ def create_woreda_map(woreda_data, boundaries, period_info, rate_thresh, abs_thr
         st.error("No woreda boundary data available")
         return None
     
-    # Merge with classification data
-    merged_woreda = woreda_gdf.merge(
-        woreda_data[['ADM3_PCODE', 'violence_affected', 'ACLED_BRD_total', 'acled_total_death_rate']], 
-        on='ADM3_PCODE', 
-        how='left'
-    ).fillna({
+    # Merge with classification data using optimized merge
+    merge_cols = ['ADM3_PCODE', 'violence_affected', 'ACLED_BRD_total', 'acled_total_death_rate']
+    merged_woreda = woreda_gdf.merge(woreda_data[merge_cols], on='ADM3_PCODE', how='left')
+    
+    # Use vectorized fillna
+    fill_values = {
         'violence_affected': False, 
         'ACLED_BRD_total': 0,
         'acled_total_death_rate': 0
-    })
+    }
+    merged_woreda = merged_woreda.fillna(fill_values)
     
-    # Create map with full width
-    m = folium.Map(location=[9.15, 40.49], zoom_start=6, tiles='OpenStreetMap')
+    # Create map with optimized settings
+    m = folium.Map(
+        location=[9.15, 40.49], 
+        zoom_start=6, 
+        tiles='OpenStreetMap',
+        prefer_canvas=True
+    )
     
-    # Add woreda layer
-    for _, row in merged_woreda.iterrows():
+    # Pre-calculate statistics for legend
+    total_woredas = len(woreda_data)
+    affected_woredas = sum(woreda_data['violence_affected'])
+    affected_percentage = (affected_woredas / total_woredas * 100) if total_woredas > 0 else 0
+    
+    # Pre-calculate colors and status for better performance
+    def get_woreda_color_status(row):
         if row['violence_affected']:
-            color = '#d73027'  # Red - Violence affected
-            opacity = 0.8
-            status = "VIOLENCE AFFECTED"
+            return '#d73027', 0.8, "VIOLENCE AFFECTED"
         elif row['ACLED_BRD_total'] > 0:
-            color = '#fd8d3c'  # Orange - Some deaths but below threshold
-            opacity = 0.6
-            status = "Below Threshold"
+            return '#fd8d3c', 0.6, "Below Threshold"
         else:
-            color = '#2c7fb8'  # Blue - No violence
-            opacity = 0.3
-            status = "No Violence"
+            return '#2c7fb8', 0.3, "No Violence"
+    
+    # Add woreda layer with optimized rendering
+    for _, row in merged_woreda.iterrows():
+        color, opacity, status = get_woreda_color_status(row)
         
+        # Simplified popup content for better performance
         popup_content = f"""
-        <div style="width: 280px; font-family: Arial, sans-serif;">
-            <h3 style="color: {color}; margin: 0 0 10px 0;">{row.get('ADM3_EN', 'Unknown')}</h3>
-            <div style="background: {color}; color: white; padding: 5px; border-radius: 3px; text-align: center; margin-bottom: 10px;">
+        <div style="width: 250px; font-family: Arial, sans-serif;">
+            <h4 style="color: {color}; margin: 0;">{row.get('ADM3_EN', 'Unknown')}</h4>
+            <div style="background: {color}; color: white; padding: 3px; border-radius: 2px; text-align: center; margin: 5px 0;">
                 <strong>{status}</strong>
             </div>
-            <table style="width: 100%; border-collapse: collapse;">
-                <tr><td><strong>Zone:</strong></td><td style="text-align: right;">{row.get('ADM2_EN', 'Unknown')}</td></tr>
-                <tr><td><strong>Region:</strong></td><td style="text-align: right;">{row.get('ADM1_EN', 'Unknown')}</td></tr>
-                <tr><td><strong>Total Deaths:</strong></td><td style="text-align: right;">{row['ACLED_BRD_total']:,.0f}</td></tr>
-                <tr><td><strong>Death Rate:</strong></td><td style="text-align: right;">{row['acled_total_death_rate']:.1f}/100k</td></tr>
-            </table>
+            <p><strong>Zone:</strong> {row.get('ADM2_EN', 'Unknown')}</p>
+            <p><strong>Deaths:</strong> {row['ACLED_BRD_total']:,.0f}</p>
+            <p><strong>Rate:</strong> {row['acled_total_death_rate']:.1f}/100k</p>
         </div>
         """
         
@@ -546,35 +815,36 @@ def create_woreda_map(woreda_data, boundaries, period_info, rate_thresh, abs_thr
             style_function=lambda x, color=color, opacity=opacity: {
                 'fillColor': color,
                 'color': 'black',
-                'weight': 0.5,
+                'weight': 0.3,
                 'fillOpacity': opacity
             },
-            popup=folium.Popup(popup_content, max_width=320),
+            popup=folium.Popup(popup_content, max_width=270),
             tooltip=f"{row.get('ADM3_EN', 'Unknown')}: {status}"
         ).add_to(m)
     
-    # Add legend
+    # Simplified legend
     legend_html = f'''
-    <div style="position: fixed; top: 10px; right: 10px; width: 260px; 
+    <div style="position: fixed; top: 10px; right: 10px; width: 240px; 
                 background-color: white; border:2px solid grey; z-index:9999; 
-                font-size:11px; padding: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-                border-radius: 6px;">
-    <h4 style="margin: 0 0 8px 0; color: #333;">Woreda Classification</h4>
-    <div style="margin-bottom: 8px;">
-        <div style="margin: 4px 0;"><span style="background:#d73027; color:white; padding:2px 4px; border-radius:2px; font-size:10px;">AFFECTED</span> Violence Affected</div>
-        <div style="margin: 4px 0;"><span style="background:#fd8d3c; color:white; padding:2px 4px; border-radius:2px; font-size:10px;">BELOW</span> Below Threshold</div>
-        <div style="margin: 4px 0;"><span style="background:#2c7fb8; color:white; padding:2px 4px; border-radius:2px; font-size:10px;">NONE</span> No Violence</div>
+                font-size:11px; padding: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+                border-radius: 4px;">
+    <h4 style="margin: 0 0 6px 0; color: #333;">Woreda Classification</h4>
+    <div style="margin-bottom: 6px;">
+        <div style="margin: 2px 0;"><span style="background:#d73027; color:white; padding:1px 3px; border-radius:1px; font-size:9px;">AFFECTED</span> Violence Affected</div>
+        <div style="margin: 2px 0;"><span style="background:#fd8d3c; color:white; padding:1px 3px; border-radius:1px; font-size:9px;">BELOW</span> Below Threshold</div>
+        <div style="margin: 2px 0;"><span style="background:#2c7fb8; color:white; padding:1px 3px; border-radius:1px; font-size:9px;">NONE</span> No Violence</div>
     </div>
-    <hr style="margin: 8px 0;">
-    <div style="font-size:10px; color:#666;">
+    <div style="font-size:9px; color:#666;">
         <strong>Period:</strong> {period_info['label']}<br>
         <strong>Criteria:</strong> >{rate_thresh:.1f}/100k & >{abs_thresh} deaths<br>
-        <strong>Affected:</strong> {sum(woreda_data['violence_affected'])}/{len(woreda_data)} ({sum(woreda_data['violence_affected'])/len(woreda_data)*100:.1f}%)
+        <strong>Affected:</strong> {affected_woredas}/{total_woredas} ({affected_percentage:.1f}%)
     </div>
     </div>
     '''
     
     m.get_root().html.add_child(folium.Element(legend_html))
+    
+    log_performance("create_woreda_map", time.time() - start_time)
     return m
 
 def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_thresh):
@@ -691,7 +961,9 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
     return fig
 
 def main():
-    """Main Streamlit application"""
+    """Main Streamlit application with optimized performance"""
+    import time
+    app_start_time = time.time()
     
     # Header
     st.markdown("""
@@ -701,20 +973,53 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     
-    # Load data with progress indicators
-    with st.spinner("Loading data..."):
-        periods = generate_12_month_periods()
-        pop_data = load_population_data()
-        admin_data = create_admin_levels(pop_data)
-        conflict_data = load_conflict_data()
-        boundaries = load_admin_boundaries()
+    # Initialize session state for data caching
+    if 'data_loaded' not in st.session_state:
+        st.session_state.data_loaded = False
+        st.session_state.periods = None
+        st.session_state.pop_data = None
+        st.session_state.admin_data = None
+        st.session_state.conflict_data = None
+        st.session_state.boundaries = None
+    
+    # Load data with progress indicators and session state caching
+    if not st.session_state.data_loaded:
+        with st.spinner("Loading data..."):
+            data_start_time = time.time()
+            
+            st.session_state.periods = generate_12_month_periods()
+            st.session_state.pop_data = load_population_data()
+            st.session_state.admin_data = create_admin_levels(st.session_state.pop_data)
+            st.session_state.conflict_data = load_conflict_data()
+            st.session_state.boundaries = load_admin_boundaries()
+            
+            st.session_state.data_loaded = True
+            
+            data_load_time = time.time() - data_start_time
+            log_performance("data_loading", data_load_time)
+            
+            # Show performance info
+            st.markdown(f"""
+            <div class="performance-info">
+                ⚡ Data loaded in {data_load_time:.2f} seconds
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Use cached data
+    periods = st.session_state.periods
+    pop_data = st.session_state.pop_data
+    admin_data = st.session_state.admin_data
+    conflict_data = st.session_state.conflict_data
+    boundaries = st.session_state.boundaries
     
     if pop_data.empty:
         st.error("Failed to load population data. Please check your data files.")
+        st.info("If you're running this on Streamlit Cloud, make sure all data files are included in your repository.")
         st.stop()
     
     if conflict_data.empty:
         st.warning("No conflict data available. Dashboard will show population data only.")
+        st.info("The dashboard will continue with limited functionality.")
     
     # Sidebar controls
     st.sidebar.header("🎛️ Analysis Controls")
@@ -962,6 +1267,75 @@ def main():
                 )
             else:
                 st.warning("No summary data to export.")
+    
+    # Performance monitoring section (expandable)
+    with st.expander("⚡ Performance Metrics", expanded=False):
+        if st.session_state.performance_metrics:
+            st.subheader("Function Performance")
+            
+            perf_data = []
+            for func_name, times in st.session_state.performance_metrics.items():
+                avg_time = sum(times) / len(times)
+                max_time = max(times)
+                min_time = min(times)
+                call_count = len(times)
+                
+                perf_data.append({
+                    'Function': func_name,
+                    'Avg Time (s)': f"{avg_time:.3f}",
+                    'Min Time (s)': f"{min_time:.3f}",
+                    'Max Time (s)': f"{max_time:.3f}",
+                    'Calls': call_count
+                })
+            
+            if perf_data:
+                perf_df = pd.DataFrame(perf_data)
+                st.dataframe(perf_df, use_container_width=True)
+                
+                # Performance tips
+                st.markdown("""
+                **Performance Tips:**
+                - Data is cached in session state for faster subsequent loads
+                - File-based caching reduces processing time for repeated operations
+                - Vectorized operations improve pandas performance
+                - Map rendering uses canvas mode for better performance
+                - Simplified popups and legends reduce rendering overhead
+                """)
+        else:
+            st.info("No performance data available yet.")
+    
+    # Add refresh button to clear cache
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        if st.button("🔄 Refresh Data Cache", use_container_width=True):
+            # Clear session state
+            for key in ['data_loaded', 'periods', 'pop_data', 'admin_data', 'conflict_data', 'boundaries']:
+                if key in st.session_state:
+                    del st.session_state[key]
+            
+            # Clear file cache if enabled
+            if CACHE_ENABLED:
+                try:
+                    import shutil
+                    if CACHE_PATH.exists():
+                        shutil.rmtree(CACHE_PATH)
+                        CACHE_PATH.mkdir(exist_ok=True)
+                except Exception:
+                    pass  # Silently fail in cloud environments
+            
+            st.success("Cache cleared! Please refresh the page to reload data.")
+            try:
+                st.rerun()
+            except AttributeError:
+                st.experimental_rerun()
+    
+    # Total app performance
+    total_time = time.time() - app_start_time
+    st.markdown(f"""
+    <div class="performance-info">
+        🏁 Total app processing time: {total_time:.2f} seconds
+    </div>
+    """, unsafe_allow_html=True)
 
 # Main app navigation - simplified to single page
 def app():
