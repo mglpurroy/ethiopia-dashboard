@@ -742,6 +742,42 @@ def create_admin_map(aggregated, boundaries, agg_level, map_var, agg_thresh, per
     </div>
     '''
     
+    # Add Admin1 (Region) borders on top of admin units
+    admin1_gdf = boundaries[1]
+    if not admin1_gdf.empty:
+        for _, row in admin1_gdf.iterrows():
+            folium.GeoJson(
+                row.geometry,
+                style_function=lambda x: {
+                    'fillColor': 'transparent',
+                    'color': '#000000',
+                    'weight': 2,
+                    'fillOpacity': 0,
+                    'opacity': 0.8
+                },
+                tooltip=f"Region: {row.get('ADM1_EN', 'Unknown')}"
+            ).add_to(m)
+    
+    # Update legend to include region borders info
+    legend_html = f'''
+    <div style="position: fixed; top: 10px; right: 10px; width: 250px; 
+                background-color: white; border:2px solid grey; z-index:9999; 
+                font-size:11px; padding: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+                border-radius: 4px;">
+    <h4 style="margin: 0 0 6px 0; color: #333;">{value_label}</h4>
+    <div style="margin-bottom: 6px;">
+        <div style="margin: 2px 0;"><span style="background:#d73027; color:white; padding:1px 3px; border-radius:1px; font-size:9px;">HIGH</span> >{agg_thresh:.1%}</div>
+        <div style="margin: 2px 0;"><span style="background:#fd8d3c; color:white; padding:1px 3px; border-radius:1px; font-size:9px;">SOME</span> >0%</div>
+        <div style="margin: 2px 0;"><span style="background:#2c7fb8; color:white; padding:1px 3px; border-radius:1px; font-size:9px;">LOW</span> 0%</div>
+    </div>
+    <div style="font-size:9px; color:#666;">
+        <strong>Period:</strong> {period_info['label']}<br>
+        <strong>Criteria:</strong> >{rate_thresh:.1f}/100k & >{abs_thresh} deaths<br>
+        <strong>Black borders:</strong> Region boundaries
+    </div>
+    </div>
+    '''
+    
     m.get_root().html.add_child(folium.Element(legend_html))
     
     log_performance("create_admin_map", time.time() - start_time)
@@ -882,15 +918,17 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
     )
     
     # Chart 1: Horizontal bar chart of units with violence
-    aggregated_nonzero = aggregated[aggregated['share_woredas_affected'] > 0].sort_values('share_woredas_affected', ascending=True)
+    # Show all units, not just those with violence, for better visibility
+    aggregated_sorted = aggregated.sort_values('share_woredas_affected', ascending=True)
     
-    if len(aggregated_nonzero) > 0:
+    if len(aggregated_sorted) > 0:
         name_col = f'{agg_level}_EN'
-        colors = ['#d73027' if above else '#fd8d3c' for above in aggregated_nonzero['above_threshold']]
+        colors = ['#d73027' if above else '#fd8d3c' if share > 0 else '#2c7fb8' 
+                 for above, share in zip(aggregated_sorted['above_threshold'], aggregated_sorted['share_woredas_affected'])]
         
         # Process names to ensure they fit properly and align with bars
         processed_names = []
-        for name in aggregated_nonzero[name_col]:
+        for name in aggregated_sorted[name_col]:
             if len(name) > 25:
                 # For very long names, try to find a good break point
                 if ' ' in name:
@@ -908,7 +946,7 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
         fig.add_trace(
             go.Bar(
                 y=processed_names,
-                x=aggregated_nonzero['share_woredas_affected'],
+                x=aggregated_sorted['share_woredas_affected'],
                 orientation='h',
                 marker_color=colors,
                 showlegend=False,
@@ -1224,6 +1262,9 @@ def main():
     if len(aggregated) > 0 and len(woreda_data) > 0:
         # Add debugging information
         st.info(f"📊 Chart Data: {len(aggregated)} administrative units, {len(woreda_data)} woredas")
+        
+        # Debug: Show data summary
+        st.info(f"🔍 Data Debug: {len(aggregated[aggregated['share_woredas_affected'] > 0])} units with violence, {len(aggregated[aggregated['share_woredas_affected'] == 0])} units without violence")
         
         analysis_fig = create_analysis_charts(
             aggregated, woreda_data, period_info, agg_level, agg_thresh
