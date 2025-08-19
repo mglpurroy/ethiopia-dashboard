@@ -882,15 +882,17 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
     )
     
     # Chart 1: Horizontal bar chart of units with violence
-    aggregated_nonzero = aggregated[aggregated['share_woredas_affected'] > 0].sort_values('share_woredas_affected', ascending=True)
+    # Show all units, not just those with violence, for better visibility
+    aggregated_sorted = aggregated.sort_values('share_woredas_affected', ascending=True)
     
-    if len(aggregated_nonzero) > 0:
+    if len(aggregated_sorted) > 0:
         name_col = f'{agg_level}_EN'
-        colors = ['#d73027' if above else '#fd8d3c' for above in aggregated_nonzero['above_threshold']]
+        colors = ['#d73027' if above else '#fd8d3c' if share > 0 else '#2c7fb8' 
+                 for above, share in zip(aggregated_sorted['above_threshold'], aggregated_sorted['share_woredas_affected'])]
         
         # Process names to ensure they fit properly
         processed_names = []
-        for name in aggregated_nonzero[name_col]:
+        for name in aggregated_sorted[name_col]:
             if len(name) > 25:
                 # For very long names, try to find a good break point
                 if ' ' in name:
@@ -908,7 +910,7 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
         fig.add_trace(
             go.Bar(
                 y=processed_names,
-                x=aggregated_nonzero['share_woredas_affected'],
+                x=aggregated_sorted['share_woredas_affected'],
                 orientation='h',
                 marker_color=colors,
                 showlegend=False,
@@ -1222,6 +1224,9 @@ def main():
     st.header("📈 Supporting Analysis & Insights")
     
     if len(aggregated) > 0 and len(woreda_data) > 0:
+        # Add debugging information
+        st.info(f"📊 Chart Data: {len(aggregated)} administrative units, {len(woreda_data)} woredas")
+        
         analysis_fig = create_analysis_charts(
             aggregated, woreda_data, period_info, agg_level, agg_thresh
         )
@@ -1251,7 +1256,15 @@ def main():
             st.markdown(f"**Violence Coverage**: {affected_woredas/total_woredas*100:.1f}% of woredas")
             st.markdown(f"**Population Impact**: {affected_population/total_population*100:.1f}% of population")
     else:
-        st.warning("No data available for analysis charts.")
+        if len(aggregated) == 0:
+            st.warning("No administrative data available for the selected period.")
+        elif len(woreda_data) == 0:
+            st.warning("No woreda data available for the selected period.")
+        else:
+            st.warning("No data available for analysis charts.")
+        
+        # Show data summary for debugging
+        st.info(f"📋 Data Summary: {len(aggregated)} admin units, {len(woreda_data)} woredas")
     
     # Data Export Section
     st.header("📥 Data Export")
