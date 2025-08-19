@@ -997,11 +997,8 @@ def create_analysis_charts(aggregated, woreda_data, period_info, agg_level, agg_
     fig.update_yaxes(
         title_text="Administrative Unit", 
         row=1, col=1,
-        tickfont=dict(size=11),  # Slightly larger font for better readability
-        automargin=True,  # Auto-adjust margins
-        tickmode='array',  # Ensure consistent tick positioning
-        ticktext=processed_names if len(aggregated_nonzero) > 0 else [],
-        tickvals=list(range(len(processed_names))) if len(aggregated_nonzero) > 0 else []
+        tickfont=dict(size=10),  # Smaller font for better fit
+        automargin=True  # Auto-adjust margins
     )
     fig.update_yaxes(title_text="Total Deaths", row=1, col=2)
     fig.update_yaxes(title_text="Number of Woredas", row=2, col=2)
